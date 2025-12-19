@@ -245,9 +245,15 @@ do_sync() {
         fi
     fi
     
-    print_info "Cloning apis repository from ${APIS_REPO_URL}..."
-    if ! git clone --depth 1 --branch "${TARGET_BRANCH}" "${APIS_REPO_URL}" "${APIS_REPO_DIR}" 2>&1; then
-        print_error "Failed to clone. Does branch '${TARGET_BRANCH}' exist in ${APIS_REPO_URL}?"
+    # Prepare clone URL - mask token in logs for security
+    local CLONE_URL="${APIS_REPO_URL}"
+    local CLONE_URL_DISPLAY="${APIS_REPO_URL}"
+    if [[ "${CLONE_URL}" =~ x-access-token:([^@]+)@ ]]; then
+        CLONE_URL_DISPLAY="${CLONE_URL//x-access-token:[^@]*@/x-access-token:***@}"
+    fi
+    print_info "Cloning apis repository from ${CLONE_URL_DISPLAY}..."
+    if ! git clone --depth 1 --branch "${TARGET_BRANCH}" "${CLONE_URL}" "${APIS_REPO_DIR}" 2>&1; then
+        print_error "Failed to clone. Does branch '${TARGET_BRANCH}' exist in ${CLONE_URL_DISPLAY}?"
         exit 1
     fi
     
@@ -290,6 +296,31 @@ Source: https://github.com/volcano-sh/volcano/commit/${VOLCANO_SHA}"
     
     if [[ "${PUSH}" == "true" ]]; then
         print_info "Pushing to remote..."
+        
+        # Ensure remote URL has authentication if APIS_REPO_URL contains it
+        # Check if we need to update the remote URL with token
+        local CURRENT_REMOTE_URL=$(git remote get-url origin 2>/dev/null || echo "")
+        local GH_TOKEN=${GH_TOKEN:-${GITHUB_TOKEN:-}}
+        
+        # If APIS_REPO_URL contains token but current remote doesn't, update it
+        if [[ "${APIS_REPO_URL}" =~ x-access-token: ]] && [[ ! "${CURRENT_REMOTE_URL}" =~ x-access-token: ]]; then
+            print_info "Updating remote URL with authentication..."
+            git remote set-url origin "${APIS_REPO_URL}"
+        # If we have GH_TOKEN but remote URL doesn't have auth, try to add it
+        elif [[ -n "${GH_TOKEN}" ]] && [[ ! "${CURRENT_REMOTE_URL}" =~ @github.com ]] && [[ "${APIS_REPO_URL}" =~ github.com ]]; then
+            # Extract repo path from APIS_REPO_URL or APIS_REPO
+            local REPO_PATH=""
+            if [[ "${APIS_REPO_URL}" =~ github.com[:/]([^/]+/[^/]+?)(\.git)?$ ]]; then
+                REPO_PATH="${BASH_REMATCH[1]}"
+                REPO_PATH="${REPO_PATH%.git}"
+            else
+                REPO_PATH="${APIS_REPO}"
+            fi
+            local AUTH_URL="https://x-access-token:${GH_TOKEN}@github.com/${REPO_PATH}.git"
+            print_info "Updating remote URL with token authentication..."
+            git remote set-url origin "${AUTH_URL}"
+        fi
+        
         if ! git push origin "${BRANCH_NAME}" 2>&1; then
             print_error "Failed to push to ${APIS_REPO}"
             print_info "Common causes:"
