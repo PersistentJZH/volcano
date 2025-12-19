@@ -1,0 +1,68 @@
+name: Sync APIs to apis repository
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - 'staging/src/volcano.sh/apis/**'
+
+env:
+  APIS_REPO: volcano-sh/apis
+
+jobs:
+  sync-apis:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout volcano repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Sync APIs
+        id: sync
+        env:
+          APIS_REPO_URL: https://x-access-token:${{ secrets.APIS_REPO_TOKEN }}@github.com/${{ env.APIS_REPO }}.git
+          TARGET_BRANCH: ${{ github.event.inputs.target_branch || github.ref_name }}
+          GH_TOKEN: ${{ secrets.APIS_REPO_TOKEN }}
+          APIS_REPO: ${{ env.APIS_REPO }}
+        run: |
+          # Run sync script and capture output
+          if ./hack/sync-apis.sh sync --push --create-pr 2>&1 | tee /tmp/sync-output.log; then
+            # Check for sync result
+            if grep -q "SYNC_RESULT=success" /tmp/sync-output.log; then
+              echo "has_changes=true" >> "$GITHUB_OUTPUT"
+            elif grep -q "SYNC_RESULT=no_changes" /tmp/sync-output.log; then
+              echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "has_changes=unknown" >> "$GITHUB_OUTPUT"
+            fi
+            echo "sha_short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Sync script failed"
+            exit 1
+          fi
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## 🔄 Sync APIs Summary"
+            echo ""
+            echo "| Item | Value |"
+            echo "|------|-------|"
+            echo "| Source | \`volcano-sh/volcano@${{ steps.sync.outputs.sha_short }}\` |"
+            echo "| Target | \`${{ env.APIS_REPO }}:${{ github.event.inputs.target_branch || github.ref_name }}\` |"
+            echo ""
+            case "${{ steps.sync.outputs.has_changes }}" in
+              "true")
+                echo "### ✅ Result: Changes synced and PR created"
+                ;;
+              "false")
+                echo "### ℹ️ Result: No changes to sync"
+                ;;
+              *)
+                echo "### ⚠️ Result: Unknown status"
+                ;;
+            esac
+          } >> "$GITHUB_STEP_SUMMARY"
